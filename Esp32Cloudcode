@@ -1,0 +1,149 @@
+#include "thingProperties.h"
+#include <ESP32Servo.h>
+
+// Entry gate setup
+const int trigEntry = 18;
+const int echoEntry = 19;
+const int servoEntryPin = 12;
+
+// Exit gate setup
+const int trigExit = 21;
+const int echoExit = 22;
+const int servoExitPin = 13;
+
+// LED pins
+int led = 4;  // Green LED for entry
+int rled = 3; // Red LED for exit
+
+// Buzzer pin
+int buzzerPin = 25;  // Buzzer connected to GPIO 25
+
+const int detectionThreshold = 15; // cm
+const int openAngle = 90;
+const int closedAngle = 0;
+
+int cars = 0; // Tracks the number of cars
+
+Servo servoEntry;
+Servo servoExit;
+
+bool entryOpen = false;
+bool exitOpen = false;
+
+void setup() {
+  Serial.begin(9600);
+  delay(1500); 
+  initProperties();  // Initializes Cloud properties
+  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+  setDebugMessageLevel(2);
+  ArduinoCloud.printDebugInfo();
+
+  // Sensor pins
+  pinMode(trigEntry, OUTPUT);
+  pinMode(echoEntry, INPUT);
+  pinMode(trigExit, OUTPUT);
+  pinMode(echoExit, INPUT);
+
+  // LED and Buzzer
+  pinMode(led, OUTPUT);
+  pinMode(rled, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+  // Servo setup
+  servoEntry.attach(servoEntryPin);
+  servoExit.attach(servoExitPin);
+  servoEntry.write(closedAngle);
+  servoExit.write(closedAngle);
+}
+
+void loop() {
+  ArduinoCloud.update();
+
+  int distanceEntry = getDistance(trigEntry, echoEntry);
+  int distanceExit = getDistance(trigExit, echoExit);
+
+  Serial.print("Entry: ");
+  Serial.print(distanceEntry);
+  Serial.print(" cm | Exit: ");
+  Serial.print(distanceExit);
+  Serial.println(" cm");
+
+  // ENTRY
+  if (distanceEntry > 0 && distanceEntry <= detectionThreshold && !entryOpen && !isFull) {
+    entryOpen = true;
+    cars++;
+    digitalWrite(led, HIGH);
+    digitalWrite(buzzerPin, HIGH);
+
+    Serial.println("Entry Gate Open");
+    Serial.print("Cars inside: ");
+    Serial.println(cars);
+
+    servoEntry.write(openAngle);
+    delay(3000);
+    digitalWrite(buzzerPin, LOW);
+    servoEntry.write(closedAngle);
+    digitalWrite(led, LOW);
+    entryOpen = false;
+  }
+
+  // EXIT
+  if (distanceExit > 0 && distanceExit <= detectionThreshold && !exitOpen) {
+    exitOpen = true;
+    cars = max(0, cars - 1);
+    digitalWrite(rled, HIGH);
+    digitalWrite(buzzerPin, HIGH);
+
+    Serial.println("Exit Gate Open");
+    Serial.print("Cars inside: ");
+    Serial.println(cars);
+
+    servoExit.write(openAngle);
+    delay(3000);
+    digitalWrite(buzzerPin, LOW);
+    servoExit.write(closedAngle);
+    digitalWrite(rled, LOW);
+    exitOpen = false;
+  }
+
+  // Update full status in Cloud
+  isFull = (cars >= 10);
+
+  delay(200);
+}
+
+// Measure distance using ultrasonic sensor
+int getDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 30000); // Timeout after 30ms
+  if (duration == 0) return -1;  // No echo received
+  return duration * 0.034 / 2;   // Convert to cm
+}
+
+// Called when isFull changes from the IoT Cloud
+void onIsFullChange() {
+  // Optional: display, log, or block based on full status
+}
+
+// Called when the user triggers gate open from dashboard
+void onUserOpenGateChange() {
+  if (userOpenGate) {
+    if (!isFull) {
+      Serial.println("Manual gate open (cloud)");
+      servoEntry.write(openAngle);
+      digitalWrite(buzzerPin, HIGH);
+      delay(3000);
+      digitalWrite(buzzerPin, LOW);
+      servoEntry.write(closedAngle);
+    } else {
+      Serial.println("Gate NOT opened – Parking is FULL!");
+    }
+
+    userOpenGate = false; // Reset the cloud toggle
+  }
+}
